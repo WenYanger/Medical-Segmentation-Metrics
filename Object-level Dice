@@ -1,0 +1,102 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import cv2
+import SimpleITK as sitk
+
+class ObjHausLoss(nn.Module):
+
+    def __init__(self):
+        super(ObjHausLoss, self).__init__()
+
+    def forward(self, S, G):
+        def Haus(S, G):
+            S = S.to(torch.int).numpy()
+            G = G.to(torch.int).numpy()
+            img1 = sitk.GetImageFromArray(S)
+            img2 = sitk.GetImageFromArray(G)
+            hausdorffcomputer = sitk.HausdorffDistanceImageFilter()
+            hausdorffcomputer.Execute(img1, img2)
+            return hausdorffcomputer.GetHausdorffDistance()
+
+        tempS = S > 0
+        totalAreaS = torch.sum(tempS, dtype=torch.float32)
+
+        tempG = G > 0
+        totalAreaG = torch.sum(tempG, dtype=torch.float32)
+
+        # 获取S中object列表及非0元素个数
+        listLabelS = torch.unique(S)
+        listLabelS = listLabelS[listLabelS != 0]
+        numS = len(listLabelS)
+        # 获取G中object列表及非0元素个数
+        listLabelG = torch.unique(G)
+        listLabelG = listLabelG[listLabelG != 0]
+        numG = len(listLabelG)
+
+        # 记录omega_i*H(G_i,S_i)
+        temp1 = 0.0
+
+        for iLabelS in range(numS):
+            # Si为S中值为iLabelS的区域, boolean矩阵
+            Si = S == listLabelS[iLabelS]
+            # 找到G中对应区域并去除背景
+            intersectlist = G[Si]
+            intersectlist = intersectlist[intersectlist != 0]
+
+            if len(intersectlist) != 0:
+                indexGi = torch.argmax(torch.bincount(intersectlist))
+                Gi = G == indexGi.item()
+            else:
+                tempDist = torch.zeros(numG)
+
+                for iLabelG in range(numG):
+                    Gi = G == listLabelG[iLabelG]
+                    tempDist[iLabelG] = Haus(Gi, Si)
+
+                minIdx = torch.argmin(tempDist)
+                Gi = G == listLabelG[minIdx]
+
+            omegai = torch.sum(Si, dtype=torch.float32) / totalAreaS
+            temp1 = temp1 + omegai * Haus(Gi, Si)
+
+        # 记录tilde_omega_i*H(tilde_G_i,tilde_S_i)
+        temp2 = 0.0
+
+        for iLabelG in range(numG):
+            # Si为S中值为iLabelS的区域, boolean矩阵
+            tildeGi = G == listLabelG[iLabelG]
+            # 找到G中对应区域并去除背景
+            intersectlist = S[tildeGi]
+            intersectlist = intersectlist[intersectlist != 0]
+
+            if len(intersectlist) != 0:
+                indextildeSi = torch.argmax(torch.bincount(intersectlist))
+                tildeSi = S == indextildeSi.item()
+            else:
+                tempDist = torch.zeros(numS)
+
+                for iLabelS in range(numS):
+                    tildeSi = S == listLabelS[iLabelS]
+                    tempDist[iLabelS] = Haus(tildeGi, tildeSi)
+
+                minIdx = torch.argmin(tempDist)
+                tildeSi = S == listLabelS[minIdx]
+
+            tildeOmegai = torch.sum(tildeGi, dtype=torch.float32) / totalAreaG
+            temp2 = temp2 + tildeOmegai * Haus(tildeGi, tildeSi)
+
+        objHaus = (temp1 + temp2) / 2
+        return objHaus
+
+
+if __name__ == '__main__':
+
+    mask1 = cv2.imread('D:\StudyOverLord\Project\ObjectDice\data\\testA_1_anno.bmp', flags=0)
+    mask2 = cv2.imread('D:\StudyOverLord\Project\ObjectDice\data\\testA_2_anno.bmp', flags=0)
+    mask1_512 = cv2.resize(mask1, (512,512))
+    mask2_512 = cv2.resize(mask2, (512,512))
+    mLoss2 = ObjHausLoss()
+    print(mLoss2(torch.from_numpy(mask1_512), torch.from_numpy(mask1_512)))
+    print(mLoss2(torch.from_numpy(mask1_512), torch.from_numpy(mask2_512)))
+
