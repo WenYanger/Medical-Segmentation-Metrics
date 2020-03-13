@@ -4,26 +4,17 @@ import numpy as np
 import cv2
 import SimpleITK as sitk
 
-class ObjHausLoss(nn.Module):
+class ObjDiceLoss(nn.Module):
 
     def __init__(self):
-        super(ObjHausLoss, self).__init__()
+        super(ObjDiceLoss, self).__init__()
 
-    def forward(self, S, G):
-        def Haus(S, G):
-            S = S.to(torch.int).numpy()
-            G = G.to(torch.int).numpy()
-            img1 = sitk.GetImageFromArray(S)
-            img2 = sitk.GetImageFromArray(G)
-            hausdorffcomputer = sitk.HausdorffDistanceImageFilter()
-            hausdorffcomputer.Execute(img1, img2)
-            return hausdorffcomputer.GetHausdorffDistance()
+    def forward(self, S: torch.Tensor, G: torch.Tensor):
 
-        tempS = S > 0
-        totalAreaS = torch.sum(tempS, dtype=torch.float32)
-
-        tempG = G > 0
-        totalAreaG = torch.sum(tempG, dtype=torch.float32)
+        def Dice(A, B):
+            temp = A & B
+            dice = 2 * torch.sum(temp, dtype=torch.float32) / (torch.sum(A, dtype=torch.float32) + torch.sum(B, dtype=torch.float32))
+            return dice
 
         # 获取S中object列表及非0元素个数
         listLabelS = torch.unique(S)
@@ -34,8 +25,15 @@ class ObjHausLoss(nn.Module):
         listLabelG = listLabelG[listLabelG != 0]
         numG = len(listLabelG)
 
-        # 记录omega_i*H(G_i,S_i)
+        if numS == 0 & numG == 0:
+            return 1
+        elif numS == 0 | numG == 0:
+            return 0
+
+        # 记录omega_i*Dice(G_i,S_i)
         temp1 = 0.0
+        # S中object总面积
+        totalAreaS = torch.sum(S > 0, dtype=torch.float32)
 
         for iLabelS in range(numS):
             # Si为S中值为iLabelS的区域, boolean矩阵
@@ -46,22 +44,19 @@ class ObjHausLoss(nn.Module):
 
             if len(intersectlist) != 0:
                 indexGi = torch.argmax(torch.bincount(intersectlist))
+                # Gi为gt中能与Si面积重合最大的object
                 Gi = G == indexGi.item()
             else:
-                tempDist = torch.zeros(numG)
-
-                for iLabelG in range(numG):
-                    Gi = G == listLabelG[iLabelG]
-                    tempDist[iLabelG] = Haus(Gi, Si)
-
-                minIdx = torch.argmin(tempDist)
-                Gi = G == listLabelG[minIdx]
+                Gi = torch.ones_like(G)
+                Gi = Gi == 0
 
             omegai = torch.sum(Si, dtype=torch.float32) / totalAreaS
-            temp1 = temp1 + omegai * Haus(Gi, Si)
+            temp1 = temp1 + omegai * Dice(Gi, Si)
 
-        # 记录tilde_omega_i*H(tilde_G_i,tilde_S_i)
+        # 记录tilde_omega_i*Dice(tilde_G_i,tilde_S_i)
         temp2 = 0.0
+        # G中object总面积
+        totalAreaG = torch.sum(G > 0)
 
         for iLabelG in range(numG):
             # Si为S中值为iLabelS的区域, boolean矩阵
@@ -74,20 +69,15 @@ class ObjHausLoss(nn.Module):
                 indextildeSi = torch.argmax(torch.bincount(intersectlist))
                 tildeSi = S == indextildeSi.item()
             else:
-                tempDist = torch.zeros(numS)
-
-                for iLabelS in range(numS):
-                    tildeSi = S == listLabelS[iLabelS]
-                    tempDist[iLabelS] = Haus(tildeGi, tildeSi)
-
-                minIdx = torch.argmin(tempDist)
-                tildeSi = S == listLabelS[minIdx]
+                tildeSi = torch.ones_like(S)
+                tildeSi = tildeSi == 0
 
             tildeOmegai = torch.sum(tildeGi, dtype=torch.float32) / totalAreaG
-            temp2 = temp2 + tildeOmegai * Haus(tildeGi, tildeSi)
+            temp2 = temp2 + tildeOmegai * Dice(tildeGi, tildeSi)
 
-        objHaus = (temp1 + temp2) / 2
-        return objHaus
+        objDice = (temp1 + temp2) / 2
+        return objDice
+
 
 
 if __name__ == '__main__':
@@ -96,7 +86,8 @@ if __name__ == '__main__':
     mask2 = cv2.imread('D:\StudyOverLord\Project\ObjectDice\data\\testA_2_anno.bmp', flags=0)
     mask1_512 = cv2.resize(mask1, (512,512))
     mask2_512 = cv2.resize(mask2, (512,512))
-    mLoss2 = ObjHausLoss()
-    print(mLoss2(torch.from_numpy(mask1_512), torch.from_numpy(mask1_512)))
-    print(mLoss2(torch.from_numpy(mask1_512), torch.from_numpy(mask2_512)))
+    mLoss1 = ObjDiceLoss()
+    print(mLoss1(torch.from_numpy(mask1_512), torch.from_numpy(mask1_512)))
+    print(mLoss1(torch.from_numpy(mask1_512), torch.from_numpy(mask2_512)))
+
 
